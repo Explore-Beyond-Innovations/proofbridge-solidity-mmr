@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Poseidon2Lib} from "@poseidon2/src/Poseidon2Lib.sol";
 import {Field} from "@poseidon2/src/Field.sol";
 
 /**
@@ -13,10 +12,23 @@ library MMRPoseidon2 {
         bytes32 root; // Poseidon2 root commitment
         uint256 size; // total number of nodes in the implicit forest
         uint256 width; // number of leaves appended so far
+        address hasher; // deployed Poseidon2Yul, set once via setHasher
         mapping(uint256 => bytes32) hashes; // nodeIndex => nodeHash
     }
 
+    // keccak256("ProofBridge.MMR.v1") mod p - domain/version tag bound into the root; must match the circuit + SDK.
+    bytes32 internal constant DOMAIN_TAG = 0x1007fd40caf0e39d3ffbecd91e2d9469b3f2294a6794c372eb5406a496b6e4ec;
+
     // ========= internal / EXTERNAL-FACING LOGIC =========
+
+    /**
+     * @notice Wire up the Poseidon2 hasher. Must be called once before any append/verify.
+     * @dev `hasher_` is a deployed Poseidon2Yul; hashing is done via staticcall for the gas win.
+     */
+    function setHasher(Tree storage tree, address hasher_) internal {
+        require(hasher_ != address(0), "MMR:ZeroHasher");
+        tree.hasher = hasher_;
+    }
 
     /**
      * @notice Append a new leaf.
@@ -38,7 +50,7 @@ library MMRPoseidon2 {
         newLeafIndex = getLeafIndex(tree.width);
 
         // hash leaf node as Poseidon2(index || value)
-        bytes32 leafNode = _hashLeaf(newLeafIndex, dataHashMod);
+        bytes32 leafNode = _hashLeaf(tree.hasher, newLeafIndex, dataHashMod);
 
         // store leaf in node map
         tree.hashes[newLeafIndex] = leafNode;
@@ -56,7 +68,7 @@ library MMRPoseidon2 {
         }
 
         // recompute MMR root as "peak bagging" of all current peaks
-        tree.root = _peakBagging(tree.width, peaks);
+        tree.root = _peakBagging(tree.hasher, tree.width, peaks);
     }
 
     /**
@@ -164,17 +176,18 @@ library MMRPoseidon2 {
      * @dev Matches inclusionProof logic in your previous version.
      */
     function verifyInclusion(
+        address hasher,
         bytes32 root_,
         uint256 width_,
         uint256 index,
         bytes32 valueHash,
         bytes32[] memory peakBag,
         bytes32[] memory siblings
-    ) internal pure returns (bool) {
+    ) internal view returns (bool) {
         require(_calcSize(width_) >= index, "MMR:IndexOOB");
 
         // root must equal bagged peak hash
-        require(root_ == _peakBagging(width_, peakBag), "MMR:BadRoot");
+        require(root_ == _peakBagging(hasher, width_, peakBag), "MMR:BadRoot");
 
         // find target peak + starting cursor
         bytes32 targetPeak;
@@ -207,13 +220,13 @@ library MMRPoseidon2 {
             cursor = path[h];
             if (h == 0) {
                 // leaf
-                node = _hashLeaf(cursor, valueHash);
+                node = _hashLeaf(hasher, cursor, valueHash);
             } else if (cursor - 1 == path[h - 1]) {
                 // sibling is on the left
-                node = _hashBranch(cursor, siblings[h - 1], node);
+                node = _hashBranch(hasher, cursor, siblings[h - 1], node);
             } else {
                 // sibling is on the right
-                node = _hashBranch(cursor, node, siblings[h - 1]);
+                node = _hashBranch(hasher, cursor, node, siblings[h - 1]);
             }
             h++;
         }
@@ -229,12 +242,25 @@ library MMRPoseidon2 {
         return (width_ << 1) - _numOfPeaks(width_);
     }
 
-    function _hashBranch(uint256 index, bytes32 left, bytes32 right) internal pure returns (bytes32) {
-        return Field.toBytes32(Poseidon2Lib.hash_3(Field.toField(index), Field.toField(left), Field.toField(right)));
+    // Poseidon2 via staticcall to the deployed Yul hasher. Inputs reduced into the field (matches Field.toField).
+    function _hash2(address hasher, uint256 a, uint256 b) private view returns (bytes32) {
+        (bool ok, bytes memory ret) = hasher.staticcall(abi.encode(a % Field.PRIME, b % Field.PRIME));
+        require(ok, "MMR:HashFail");
+        return abi.decode(ret, (bytes32));
     }
 
-    function _hashLeaf(uint256 index, bytes32 dataHash) internal pure returns (bytes32) {
-        return Field.toBytes32(Poseidon2Lib.hash_2(Field.toField(index), Field.toField(dataHash)));
+    function _hash3(address hasher, uint256 a, uint256 b, uint256 c) private view returns (bytes32) {
+        (bool ok, bytes memory ret) = hasher.staticcall(abi.encode(a % Field.PRIME, b % Field.PRIME, c % Field.PRIME));
+        require(ok, "MMR:HashFail");
+        return abi.decode(ret, (bytes32));
+    }
+
+    function _hashBranch(address hasher, uint256 index, bytes32 left, bytes32 right) internal view returns (bytes32) {
+        return _hash3(hasher, index, uint256(left), uint256(right));
+    }
+
+    function _hashLeaf(address hasher, uint256 index, bytes32 dataHash) internal view returns (bytes32) {
+        return _hash2(hasher, index, uint256(dataHash));
     }
 
     function _fieldMod(bytes32 dataHash) internal pure returns (bytes32) {
@@ -242,20 +268,20 @@ library MMRPoseidon2 {
         return bytes32(uint256(dataHash) % Field.PRIME);
     }
 
-    function _peakBagging(uint256 width_, bytes32[] memory peaks_) internal pure returns (bytes32) {
+    function _peakBagging(address hasher, uint256 width_, bytes32[] memory peaks_) internal view returns (bytes32) {
         if (width_ == 0) return bytes32(0);
 
         uint256 size_ = _calcSize(width_);
         require(_numOfPeaks(width_) == peaks_.length, "MMR:BadPeakCount");
 
-        // fold: acc = H(acc, peak[i])
-        Field.Type acc = Field.toField(size_);
-        for (uint256 i = 0; i < peaks_.length; i++) {
-            acc = Poseidon2Lib.hash_2(acc, Field.toField(peaks_[i]));
+        // single size-bind: fold the peaks seeded by the first peak (not size)
+        bytes32 acc = peaks_[0];
+        for (uint256 i = 1; i < peaks_.length; i++) {
+            acc = _hash2(hasher, uint256(acc), uint256(peaks_[i]));
         }
 
-        // final bind again with size
-        return Field.toBytes32(Poseidon2Lib.hash_2(Field.toField(size_), Field.toField(Field.toBytes32(acc))));
+        // bind size + domain once: root = H_3(DOMAIN_TAG, size, acc)
+        return _hash3(hasher, uint256(DOMAIN_TAG), size_, uint256(acc));
     }
 
     function _getPeakIndexes(uint256 width_) internal pure returns (uint256[] memory peakIndexes) {
@@ -327,7 +353,7 @@ library MMRPoseidon2 {
         bytes32 leftHash = _getOrCreateNode(tree, leftIdx);
         bytes32 rightHash = _getOrCreateNode(tree, rightIdx);
 
-        bytes32 branch = _hashBranch(index, leftHash, rightHash);
+        bytes32 branch = _hashBranch(tree.hasher, index, leftHash, rightHash);
         tree.hashes[index] = branch;
         return branch;
     }

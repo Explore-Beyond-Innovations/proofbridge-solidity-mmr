@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 
 import {MMRPoseidon2} from "../src/MMRPoseidon2.sol";
 import {Field} from "@poseidon2/src/Field.sol";
+import {Poseidon2Yul} from "@poseidon2/src/Poseidon2Yul.sol";
 
 /**
  * I wrote this solidity test file just to show how to use this library
@@ -30,6 +31,10 @@ contract TestMMRPoseidon is Test {
      *  1  2   4  5   8  9    11  12   16  17
      */
     function testPoseidonMountainRange() public {
+        // wire the Poseidon2 hasher (staticcall target) before any append
+        Poseidon2Yul yul = new Poseidon2Yul();
+        mmr.setHasher(address(yul));
+
         // Hash data before appending (MMR expects pre-hashed values)
         mmr.append(hashData("0x0001")); // stored at index 1
         mmr.append(hashData("0x0002")); // stored at index 2
@@ -67,7 +72,7 @@ contract TestMMRPoseidon is Test {
 
         // using MMR library verify the root includes the leaf
         assertTrue(
-            MMRPoseidon2.verifyInclusion(root, width, index, valueHash, peaks, siblings),
+            MMRPoseidon2.verifyInclusion(address(yul), root, width, index, valueHash, peaks, siblings),
             "should return true or reverted"
         );
     }
