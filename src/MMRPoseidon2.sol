@@ -254,9 +254,7 @@ library MMRPoseidon2 {
 
     function hash_3(address hasher, uint256 a, uint256 b, uint256 c) internal view returns (bytes32) {
         (bool ok, bytes memory ret) = hasher.staticcall(
-            abi.encodeWithSignature(
-                "hash_3(uint256,uint256,uint256)", a % PRIME, b % PRIME, c % PRIME
-            )
+            abi.encodeWithSignature("hash_3(uint256,uint256,uint256)", a % PRIME, b % PRIME, c % PRIME)
         );
         require(ok, "MMR:HashFail");
         return abi.decode(ret, (bytes32));

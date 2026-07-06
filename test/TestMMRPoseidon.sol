@@ -38,9 +38,7 @@ contract TestMMRPoseidon is Test {
         IPoseidon2 yul = IPoseidon2(address(new Poseidon2Yul()));
 
         assertEq(
-            yul.hash_2(1, 2),
-            0x038682aa1cb5ae4e0a3f13da432a95c77c5c111f6f030faf9cad641ce1ed7383,
-            "hash_2(1,2) mismatch"
+            yul.hash_2(1, 2), 0x038682aa1cb5ae4e0a3f13da432a95c77c5c111f6f030faf9cad641ce1ed7383, "hash_2(1,2) mismatch"
         );
         assertEq(
             yul.hash_2(
