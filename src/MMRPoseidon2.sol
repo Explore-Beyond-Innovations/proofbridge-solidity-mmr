@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Field} from "@poseidon2/src/Field.sol";
-
 /**
  * @notice Merkle Mountain Range with Poseidon2 hashing.
  * @dev Indexing starts at 1 (not 0)
@@ -18,6 +16,9 @@ library MMRPoseidon2 {
 
     // keccak256("ProofBridge.MMR.v1") mod p - domain/version tag bound into the root; must match the circuit + SDK.
     bytes32 internal constant DOMAIN_TAG = 0x1007fd40caf0e39d3ffbecd91e2d9469b3f2294a6794c372eb5406a496b6e4ec;
+
+    // BN254 scalar field modulus; all hash inputs are reduced into it.
+    uint256 internal constant PRIME = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
     // ========= internal / EXTERNAL-FACING LOGIC =========
 
@@ -242,15 +243,21 @@ library MMRPoseidon2 {
         return (width_ << 1) - _numOfPeaks(width_);
     }
 
-    // Poseidon2 via staticcall to the deployed Yul hasher. Inputs reduced into the field (matches Field.toField).
+    // Poseidon2 via staticcall to the deployed Yul hasher (poseidon2-evm >= v2: selector-prefixed
+    // IPoseidon2 calling convention). Inputs reduced into the field first.
     function _hash2(address hasher, uint256 a, uint256 b) private view returns (bytes32) {
-        (bool ok, bytes memory ret) = hasher.staticcall(abi.encode(a % Field.PRIME, b % Field.PRIME));
+        (bool ok, bytes memory ret) =
+            hasher.staticcall(abi.encodeWithSignature("hash_2(uint256,uint256)", a % PRIME, b % PRIME));
         require(ok, "MMR:HashFail");
         return abi.decode(ret, (bytes32));
     }
 
     function _hash3(address hasher, uint256 a, uint256 b, uint256 c) private view returns (bytes32) {
-        (bool ok, bytes memory ret) = hasher.staticcall(abi.encode(a % Field.PRIME, b % Field.PRIME, c % Field.PRIME));
+        (bool ok, bytes memory ret) = hasher.staticcall(
+            abi.encodeWithSignature(
+                "hash_3(uint256,uint256,uint256)", a % PRIME, b % PRIME, c % PRIME
+            )
+        );
         require(ok, "MMR:HashFail");
         return abi.decode(ret, (bytes32));
     }
@@ -265,7 +272,7 @@ library MMRPoseidon2 {
 
     function _fieldMod(bytes32 dataHash) internal pure returns (bytes32) {
         // reduce into BN256 scalar field to align with Poseidon2 field
-        return bytes32(uint256(dataHash) % Field.PRIME);
+        return bytes32(uint256(dataHash) % PRIME);
     }
 
     function _peakBagging(address hasher, uint256 width_, bytes32[] memory peaks_) internal view returns (bytes32) {
