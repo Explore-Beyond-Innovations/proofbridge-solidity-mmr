@@ -245,14 +245,14 @@ library MMRPoseidon2 {
 
     // Poseidon2 via staticcall to the deployed Yul hasher (poseidon2-evm >= v2: selector-prefixed
     // IPoseidon2 calling convention). Inputs reduced into the field first.
-    function _hash2(address hasher, uint256 a, uint256 b) private view returns (bytes32) {
+    function hash_2(address hasher, uint256 a, uint256 b) internal view returns (bytes32) {
         (bool ok, bytes memory ret) =
             hasher.staticcall(abi.encodeWithSignature("hash_2(uint256,uint256)", a % PRIME, b % PRIME));
         require(ok, "MMR:HashFail");
         return abi.decode(ret, (bytes32));
     }
 
-    function _hash3(address hasher, uint256 a, uint256 b, uint256 c) private view returns (bytes32) {
+    function hash_3(address hasher, uint256 a, uint256 b, uint256 c) internal view returns (bytes32) {
         (bool ok, bytes memory ret) = hasher.staticcall(
             abi.encodeWithSignature(
                 "hash_3(uint256,uint256,uint256)", a % PRIME, b % PRIME, c % PRIME
@@ -263,11 +263,11 @@ library MMRPoseidon2 {
     }
 
     function _hashBranch(address hasher, uint256 index, bytes32 left, bytes32 right) internal view returns (bytes32) {
-        return _hash3(hasher, index, uint256(left), uint256(right));
+        return hash_3(hasher, index, uint256(left), uint256(right));
     }
 
     function _hashLeaf(address hasher, uint256 index, bytes32 dataHash) internal view returns (bytes32) {
-        return _hash2(hasher, index, uint256(dataHash));
+        return hash_2(hasher, index, uint256(dataHash));
     }
 
     function _fieldMod(bytes32 dataHash) internal pure returns (bytes32) {
@@ -284,11 +284,11 @@ library MMRPoseidon2 {
         // single size-bind: fold the peaks seeded by the first peak (not size)
         bytes32 acc = peaks_[0];
         for (uint256 i = 1; i < peaks_.length; i++) {
-            acc = _hash2(hasher, uint256(acc), uint256(peaks_[i]));
+            acc = hash_2(hasher, uint256(acc), uint256(peaks_[i]));
         }
 
         // bind size + domain once: root = H_3(DOMAIN_TAG, size, acc)
-        return _hash3(hasher, uint256(DOMAIN_TAG), size_, uint256(acc));
+        return hash_3(hasher, uint256(DOMAIN_TAG), size_, uint256(acc));
     }
 
     function _getPeakIndexes(uint256 width_) internal pure returns (uint256[] memory peakIndexes) {
